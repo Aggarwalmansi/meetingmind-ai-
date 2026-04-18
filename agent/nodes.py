@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage
 from .state import MeetingState
+from rag.retriever import retrieve_context
+from notion_client import Client as NotionClient
 load_dotenv()
 # Groq is our AI engine — fast and free on the developer tier
 llm = ChatGroq(model='llama-3.1-8b-instant', temperature=0.3)
@@ -28,20 +30,27 @@ def transcribe_audio(state: MeetingState) -> dict:
     return {'transcript': chr(10).join(lines)}
 
 def summarize_meeting(state: MeetingState) -> dict:
-    """
-    Uses Groq / Llama 3 to produce a crisp executive summary.
-    """
     transcript = state.get('transcript', '')
-    prompt = f"""
-    You are a professional meeting analyst.
-    Produce a concise executive summary of the following meeting transcript.
-    Structure your output in three sections:
-    1. OVERVIEW (2-3 sentences of what the meeting was about)
-    2. KEY DECISIONS (bullet points, each starting with a verb)
-    3. OPEN QUESTIONS (unresolved items that need follow-up)
-    Transcript:
+    rag_context = state.get('rag_context', '')
+    # Build the context section only if RAG found something
+    context_section = ''
+    if rag_context:
+        context_section = f'''
+        RELEVANT PAST MEETINGS FOR CONTEXT:
+        {rag_context}
+        Use the above past meetings to provide continuity. If today's meeting references
+        something discussed before, note that connection explicitly.
+        '''
+    prompt = f'''
+    You are a professional meeting analyst with access to historical context.
+    {context_section}
+    TODAY'S MEETING TRANSCRIPT:
     {transcript}
-    """
+    Produce a structured executive summary with three sections:
+    1. OVERVIEW — 2-3 sentences on what the meeting was about
+    2. KEY DECISIONS — bullet points, each starting with a verb
+    3. OPEN QUESTIONS — unresolved items needing follow-up
+    '''
     response = llm.invoke([HumanMessage(content=prompt)])
     return {'summary': response.content}
 
@@ -108,18 +117,78 @@ def synthesize_report(state: MeetingState) -> dict:
          for i in items]
     ) or ' None identified.'
     report = f"""
-# MeetingMind AI Report
+    # MeetingMind AI Report
 
-## Executive Summary
-{summary}
+    ## Executive Summary
+    {summary}
 
-## Action Items
-{items_text}
+    ## Action Items
+    {items_text}
 
-## Sentiment Analysis
-- Overall tone: {sent.get('overall_tone', 'N/A')}
-- Energy level: {sent.get('energy_level', 'N/A')}
-- Risk flags: {', '.join(sent.get('risk_flags', [])) or 'None'}
-- Facilitator note: {sent.get('recommendation', 'N/A')}
-"""
+    ## Sentiment Analysis
+    - Overall tone: {sent.get('overall_tone', 'N/A')}
+    - Energy level: {sent.get('energy_level', 'N/A')}
+    - Risk flags: {', '.join(sent.get('risk_flags', [])) or 'None'}
+    - Facilitator note: {sent.get('recommendation', 'N/A')}
+    """
     return {'report': report.strip()}
+
+def rag_context_node(state: MeetingState) -> dict:
+    """
+    Retrieves the top 3 most relevant past meeting summaries
+    and stores them in state so other agents can use them.
+    This node runs BEFORE summarization.
+    """
+    transcript = state.get('transcript', '')
+    if not transcript:
+        return {'rag_context': ''}
+    # Use first 500 chars of transcript as search query
+    query = transcript[:500]
+    context = retrieve_context(query, n_results=3)
+    return {'rag_context': context}
+
+def push_to_notion(state: MeetingState) -> dict:
+    if not state.get('push_notion', True):
+        return {}
+    """
+    Pushes action items from the current meeting into a Notion database.
+    Each action item becomes its own row in the database.
+    This is an optional output node — it does not block the main pipeline.
+    """
+    notion_token = os.getenv('NOTION_TOKEN')
+    notion_db_id = os.getenv('NOTION_DB_ID')
+    if not notion_token or not notion_db_id:
+        print('Notion credentials not found — skipping Notion push')
+        return {}
+    notion = NotionClient(auth=notion_token)
+    items = state.get('action_items', [])
+    today = __import__('datetime').date.today().isoformat()
+    for item in items:
+        try:
+            notion.pages.create(
+                parent={'database_id': notion_db_id},
+                properties={
+                    'Name': {
+                        'title': [{'text': {'content': item.get('task', '')}}]
+                    },
+                    'Owner': {
+                        'rich_text': [{'text': {'content': item.get('owner', 'Unassigned')}}]
+                    },
+                    'Deadline': {
+                        'rich_text': [{'text': {'content': item.get('deadline', 'Not specified')}}]
+                    },
+                    'Priority': {
+                        'select': {'name': item.get('priority', 'Medium')}
+                    },
+                    'Meeting Date': {
+                        'date': {'start': today}
+                    },
+                    'Audio URL': {
+                        'rich_text': [{'text': {'content': state.get('audio_url', '')}}]
+                    },
+                }
+            )
+        except Exception as e:
+            print(f'Notion push failed for item: {e}')
+            continue
+    return {} # no state mutation needed

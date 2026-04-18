@@ -10,3 +10,6 @@ requests
 assemblyai
 reportlab
 pydantic
+chromadb
+sentence-transformers
+notion-client
