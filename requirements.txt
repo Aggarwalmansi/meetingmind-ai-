@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+langgraph
+langchain
+langchain-groq
+langchain-core
+python-dotenv
+streamlit
+requests
+assemblyai
+reportlab
+pydantic
