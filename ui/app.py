@@ -8,7 +8,7 @@ page_icon='■',
 layout='wide',
 )
 # ■■ IMPORTANT: Change this URL in Phase 8 after backend is deployed ■■■■■■
-BACKEND_URL = 'http://127.0.0.1:8000'
+BACKEND_URL = 'https://meetingmind-ai-hkfc.onrender.com'
 # ■■ Header
 
 st.title('■ MeetingMind AI')
