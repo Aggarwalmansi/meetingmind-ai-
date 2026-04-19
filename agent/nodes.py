@@ -148,13 +148,14 @@ def rag_context_node(state: MeetingState) -> dict:
     return {'rag_context': context}
 
 def push_to_notion(state: MeetingState) -> dict:
-    if not state.get('push_notion', True):
-        return {}
     """
     Pushes action items from the current meeting into a Notion database.
     Each action item becomes its own row in the database.
     This is an optional output node — it does not block the main pipeline.
     """
+    if not state.get('push_notion', False):
+        return {}
+
     notion_token = os.getenv('NOTION_TOKEN')
     notion_db_id = os.getenv('NOTION_DB_ID')
     if not notion_token or not notion_db_id:
@@ -189,6 +190,6 @@ def push_to_notion(state: MeetingState) -> dict:
                 }
             )
         except Exception as e:
-            print(f'Notion push failed for item: {e}')
-            raise e
-    return {} # no state mutation needed
+            print(f'[Notion] Push failed for item "{item.get("task", "")}" — {type(e).__name__}: {e}')
+            continue  # never crash the pipeline over Notion
+    return {}  # no state mutation needed
