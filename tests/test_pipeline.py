@@ -86,6 +86,9 @@ class NodeTests(unittest.TestCase):
     def test_push_to_notion_handles_malformed_items_without_crashing(self, notion_client_cls):
         notion = MagicMock()
         notion.databases.retrieve.return_value = {
+            'data_sources': [{'id': 'ds_123'}]
+        }
+        notion.data_sources.retrieve.return_value = {
             'properties': {
                 'Task': {'type': 'title'},
                 'Owner': {'type': 'rich_text'},
@@ -105,6 +108,35 @@ class NodeTests(unittest.TestCase):
             })
 
         self.assertEqual(result, {})
+        notion.pages.create.assert_called_once()
+
+    @patch('agent.nodes.NotionClient')
+    def test_push_to_notion_reads_schema_from_data_source_shape(self, notion_client_cls):
+        notion = MagicMock()
+        notion.databases.retrieve.return_value = {
+            'data_sources': [{'id': 'ds_123'}]
+        }
+        notion.data_sources.retrieve.return_value = {
+            'properties': {
+                'Name': {'type': 'title'},
+                'Owner': {'type': 'rich_text'},
+                'Deadline': {'type': 'rich_text'},
+                'Priority': {'type': 'select'},
+                'Meeting Date': {'type': 'date'},
+                'Audio URL': {'type': 'rich_text'},
+            }
+        }
+        notion_client_cls.return_value = notion
+
+        with patch.dict('os.environ', {'NOTION_TOKEN': 'token', 'NOTION_DB_ID': 'db'}, clear=False):
+            result = nodes.push_to_notion({
+                'push_notion': True,
+                'audio_url': 'https://example.com/audio.mp3',
+                'action_items': [{'task': 'Ship release', 'owner': 'Ava', 'deadline': 'Friday', 'priority': 'High'}],
+            })
+
+        self.assertEqual(result, {})
+        notion.data_sources.retrieve.assert_called_once_with(data_source_id='ds_123')
         notion.pages.create.assert_called_once()
 
 

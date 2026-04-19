@@ -182,6 +182,18 @@ def push_to_notion(state: MeetingState) -> dict:
         return {}
 
     properties = database.get('properties', {})
+    if not properties:
+        data_sources = database.get('data_sources', [])
+        data_source_id = data_sources[0].get('id') if data_sources else None
+        if data_source_id:
+            try:
+                data_source = notion.data_sources.retrieve(data_source_id=data_source_id)
+                properties = data_source.get('properties', {})
+                logger.info('Resolved Notion schema via data source %s', data_source_id)
+            except Exception as exc:
+                logger.exception('Failed to retrieve Notion data source schema: %s', exc)
+                return {}
+
     title_property = next((name for name, meta in properties.items() if meta.get('type') == 'title'), None)
     if not title_property:
         logger.error('Notion database %s has no title property; skipping push', notion_db_id)
