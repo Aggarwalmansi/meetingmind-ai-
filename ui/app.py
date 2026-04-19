@@ -1,5 +1,7 @@
 import streamlit as st
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ■■ Page configuration
 st.set_page_config(
@@ -10,8 +12,34 @@ st.set_page_config(
 
 BACKEND_URL = 'https://meetingmind-ai-hkfc.onrender.com'
 
+session = requests.Session()
+retry = Retry(
+    total=3,
+    connect=3,
+    read=3,
+    backoff_factor=1.5,
+    status_forcelist=[429, 502, 503, 504],
+    allowed_methods=['GET', 'POST'],
+    raise_on_status=False,
+)
+adapter = HTTPAdapter(max_retries=retry)
+session.mount('http://', adapter)
+session.mount('https://', adapter)
+
+
+def api_request(method: str, path: str, **kwargs) -> requests.Response:
+    headers = kwargs.pop('headers', {})
+    headers.setdefault('Accept', 'application/json')
+    return session.request(method, f'{BACKEND_URL}{path}', headers=headers, **kwargs)
+
 
 def parse_api_error(resp: requests.Response) -> str:
+    content_type = resp.headers.get('content-type', '').lower()
+    if 'text/html' in content_type:
+        if resp.status_code == 502:
+            return 'The frontend could reach the server, but the upstream gateway returned 502 while waiting for the analysis response. This usually means the long-running request needs a retry.'
+        return f'The server returned an HTML error page (HTTP {resp.status_code}) instead of JSON.'
+
     try:
         payload = resp.json()
     except ValueError:
@@ -29,10 +57,14 @@ if page == 'Meeting History':
     st.title('Meeting History')
     search_q = st.text_input('Search meetings', placeholder='keyword...')
     
-    if search_q:
-        resp = requests.get(f'{BACKEND_URL}/history/search?query={search_q}')
-    else:
-        resp = requests.get(f'{BACKEND_URL}/history')
+    try:
+        if search_q:
+            resp = api_request('GET', '/history/search', params={'query': search_q}, timeout=(10, 60))
+        else:
+            resp = api_request('GET', '/history', timeout=(10, 60))
+    except requests.RequestException as e:
+        st.error(f'Could not load history: {e}')
+        st.stop()
     
     if resp.status_code == 200:
         meetings = resp.json()
@@ -69,10 +101,12 @@ else:
         else:
             with st.spinner('Agents are working... this takes 30-90 seconds.'):
                 try:
-                    resp = requests.post(
-                        f'{BACKEND_URL}/analyze?push_notion={str(push_notion).lower()}',
+                    resp = api_request(
+                        'POST',
+                        '/analyze',
+                        params={'push_notion': str(push_notion).lower()},
                         json={'audio_url': audio_url},
-                        timeout=300,
+                        timeout=(15, 600),
                     )
                     if resp.status_code != 200:
                         st.error(f'Analysis failed: {parse_api_error(resp)}')
@@ -154,10 +188,11 @@ else:
             st.subheader('Download Report')
 
             if meeting_id:
-                pdf_resp = requests.get(
-                    f'{BACKEND_URL}/report/{meeting_id}',
-                    timeout=60,
-                )
+                try:
+                    pdf_resp = api_request('GET', f'/report/{meeting_id}', timeout=(10, 120))
+                except requests.RequestException as e:
+                    st.error(f'Could not fetch PDF report: {e}')
+                    st.stop()
 
                 if pdf_resp.status_code == 200:
                     st.download_button(
