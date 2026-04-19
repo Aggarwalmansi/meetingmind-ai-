@@ -1,5 +1,5 @@
 import streamlit as st
-import requests, json
+import requests
 
 # ■■ Page configuration
 st.set_page_config(
@@ -28,9 +28,10 @@ if page == 'Meeting History':
         for m in meetings:
             with st.expander(f"{m['created_at'][:16]} — {m['audio_url'][:60]}"):
                 st.write(m['summary'])
-                items = json.loads(m['action_items'] or '[]')
+                items = m.get('action_items') or []
                 for item in items:
-                    st.markdown(f"- **{item['task']}** — {item['owner']}")
+                    if isinstance(item, dict):
+                        st.markdown(f"- **{item.get('task', 'Untitled task')}** — {item.get('owner', 'Unassigned')}")
     else:
         st.error(f'Could not load history. Backend returned: {resp.status_code}')
         with st.expander('Debug Info'):

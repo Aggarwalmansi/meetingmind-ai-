@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,6 +7,10 @@ from db.database import init_db, save_meeting, get_all_meetings, search_meetings
 from rag.retriever import index_meeting
 from fastapi.responses import Response
 from pdf_report.generator import generate_pdf
+from utils import normalize_meeting_payload
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Call init_db() when the app starts
 init_db()
@@ -30,8 +35,16 @@ def home():
 @app.post('/analyze')
 def analyze_meeting(req: MeetingRequest,push_notion: bool = True):
     try:
+        logger.info('Analyze request received (push_notion=%s, audio_url=%s)', push_notion, req.audio_url)
         initial_state = {'audio_url': req.audio_url,'push_notion': push_notion,}
-        result = meeting_app.invoke(initial_state)
+        result = normalize_meeting_payload(meeting_app.invoke(initial_state))
+        logger.info(
+            'Pipeline completed (transcript_chars=%s, summary_chars=%s, action_items=%s, report_chars=%s)',
+            len(result.get('transcript', '')),
+            len(result.get('summary', '')),
+            len(result.get('action_items', [])),
+            len(result.get('report', '')),
+        )
         # Persist the result to SQLite
         result['audio_url'] = req.audio_url
 
@@ -65,11 +78,6 @@ def download_report(meeting_id: int):
     meeting = get_meeting_by_id(meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail=f'Meeting {meeting_id} not found')
-
-    # Deserialize JSON fields stored as strings in SQLite
-    import json
-    meeting['action_items'] = json.loads(meeting.get('action_items') or '[]')
-    meeting['sentiment']    = json.loads(meeting.get('sentiment')    or '{}')
 
     pdf_bytes = generate_pdf(meeting)
     return Response(

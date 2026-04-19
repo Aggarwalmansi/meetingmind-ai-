@@ -1,11 +1,18 @@
-import os, json, assemblyai as aai
+import logging
+import os
+import json
+import assemblyai as aai
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage
 from .state import MeetingState
 from rag.retriever import retrieve_context
 from notion_client import Client as NotionClient
+from utils import normalize_action_items, normalize_sentiment
+
 load_dotenv()
+logger = logging.getLogger(__name__)
+
 # Groq is our AI engine — fast and free on the developer tier
 llm = ChatGroq(model='llama-3.1-8b-instant', temperature=0.3)
 # Set AssemblyAI key
@@ -23,6 +30,12 @@ def transcribe_audio(state: MeetingState) -> dict:
     transcript_obj = transcriber.transcribe(audio_url)
     if transcript_obj.status == aai.TranscriptStatus.error:
         return {'transcript': f'Transcription failed: {transcript_obj.error}'}
+
+    if not getattr(transcript_obj, 'utterances', None):
+        transcript_text = (getattr(transcript_obj, 'text', '') or '').strip()
+        logger.info('Transcription completed without utterances; using raw text fallback (chars=%s)', len(transcript_text))
+        return {'transcript': transcript_text}
+
     # Build a speaker-labeled transcript string
     lines = []
     for utterance in transcript_obj.utterances:
@@ -72,11 +85,9 @@ def extract_action_items(state: MeetingState) -> dict:
     {transcript}
     """
     response = llm.invoke([HumanMessage(content=prompt)])
-    try:
-        items = json.loads(response.content)
-    except json.JSONDecodeError:
-        items = [{'task': 'Could not parse action items', 'owner': '-',
-    'deadline': '-', 'priority': '-'}]
+    items = normalize_action_items(response.content)
+    if not items:
+        logger.warning('Action item extraction returned an unexpected payload shape')
     return {'action_items': items}
 
 def analyze_sentiment(state: MeetingState) -> dict:
@@ -96,11 +107,7 @@ def analyze_sentiment(state: MeetingState) -> dict:
     {transcript}
     """
     response = llm.invoke([HumanMessage(content=prompt)])
-    try:
-        sentiment = json.loads(response.content)
-    except json.JSONDecodeError:
-        sentiment = {'overall_tone': 'Unknown', 'risk_flags': [],
-                     'energy_level': 'Unknown', 'recommendation': ''}
+    sentiment = normalize_sentiment(response.content)
     return {'sentiment': sentiment}
 
 
@@ -110,8 +117,8 @@ def synthesize_report(state: MeetingState) -> dict:
     The FastAPI endpoint will also return this as JSON.
     """
     summary = state.get('summary', 'No summary available.')
-    items = state.get('action_items', [])
-    sent = state.get('sentiment', {})
+    items = normalize_action_items(state.get('action_items', []))
+    sent = normalize_sentiment(state.get('sentiment', {}))
     items_text = '\n'.join(
         [f" [{i['priority']}] {i['task']} — {i['owner']} by {i['deadline']}"
          for i in items]
@@ -148,9 +155,6 @@ def rag_context_node(state: MeetingState) -> dict:
     return {'rag_context': context}
 
 def push_to_notion(state: MeetingState) -> dict:
-    print("=== ENTERED push_to_notion ===")
-    print("STATE:", state)
-    print("ACTION ITEMS:", state.get('action_items'))
     """
     Pushes action items from the current meeting into a Notion database.
     Each action item becomes its own row in the database.
@@ -162,38 +166,62 @@ def push_to_notion(state: MeetingState) -> dict:
     notion_token = os.getenv('NOTION_TOKEN')
     notion_db_id = os.getenv('NOTION_DB_ID')
     if not notion_token or not notion_db_id:
-        print('Notion credentials not found — skipping Notion push')
+        logger.warning('Notion credentials not found; skipping Notion push')
         return {}
+
     notion = NotionClient(auth=notion_token)
-    items = state.get('action_items', [])
+    items = normalize_action_items(state.get('action_items', []))
+    if not items:
+        logger.info('Skipping Notion push because there are no normalized action items')
+        return {}
+
+    try:
+        database = notion.databases.retrieve(database_id=notion_db_id)
+    except Exception as exc:
+        logger.exception('Failed to retrieve Notion database schema: %s', exc)
+        return {}
+
+    properties = database.get('properties', {})
+    title_property = next((name for name, meta in properties.items() if meta.get('type') == 'title'), None)
+    if not title_property:
+        logger.error('Notion database %s has no title property; skipping push', notion_db_id)
+        return {}
+
     today = __import__('datetime').date.today().isoformat()
     for item in items:
-        print("DEBUG ITEM:", item)
         try:
+            notion_properties = {
+                title_property: {
+                    'title': [{'text': {'content': item.get('task', 'Untitled task')}}]
+                }
+            }
+            if 'Owner' in properties and properties['Owner'].get('type') == 'rich_text':
+                notion_properties['Owner'] = {
+                    'rich_text': [{'text': {'content': item.get('owner', 'Unassigned')}}]
+                }
+            if 'Deadline' in properties and properties['Deadline'].get('type') == 'rich_text':
+                notion_properties['Deadline'] = {
+                    'rich_text': [{'text': {'content': item.get('deadline', 'Not specified')}}]
+                }
+            if 'Priority' in properties and properties['Priority'].get('type') == 'select':
+                notion_properties['Priority'] = {
+                    'select': {'name': item.get('priority', 'Medium')}
+                }
+            if 'Meeting Date' in properties and properties['Meeting Date'].get('type') == 'date':
+                notion_properties['Meeting Date'] = {
+                    'date': {'start': today}
+                }
+            if 'Audio URL' in properties and properties['Audio URL'].get('type') == 'rich_text':
+                notion_properties['Audio URL'] = {
+                    'rich_text': [{'text': {'content': state.get('audio_url', '')}}]
+                }
+
             notion.pages.create(
                 parent={'database_id': notion_db_id},
-                properties={
-                    'Name': {
-                        'title': [{'text': {'content': item.get('task', '')}}]
-                    },
-                    'Owner': {
-                        'rich_text': [{'text': {'content': item.get('owner', 'Unassigned')}}]
-                    },
-                    'Deadline': {
-                        'rich_text': [{'text': {'content': item.get('deadline', 'Not specified')}}]
-                    },
-                    'Priority': {
-                        'select': {'name': item.get('priority', 'Medium')}
-                    },
-                    'Meeting Date': {
-                        'date': {'start': today}
-                    },
-                    'Audio URL': {
-                        'rich_text': [{'text': {'content': state.get('audio_url', '')}}]
-                    },
-                }
+                properties=notion_properties,
             )
-        except Exception as e:
-            print(f'[Notion] Push failed for item "{item.get("task", "")}" — {type(e).__name__}: {e}')
-            continue  # never crash the pipeline over Notion
+        except Exception as exc:
+            task_name = item.get('task', 'Untitled task') if isinstance(item, dict) else str(item)
+            logger.exception('[Notion] Push failed for item "%s": %s', task_name, exc)
+            continue
     return {}  # no state mutation needed

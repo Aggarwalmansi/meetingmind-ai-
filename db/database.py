@@ -1,5 +1,7 @@
 import sqlite3, json, os
 from datetime import datetime
+from utils import normalize_meeting_payload
+
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'meetings.db')
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -29,6 +31,7 @@ def save_meeting(result: dict) -> int:
     """
     Saves one analysis result. Returns the new row id.
     """
+    result = normalize_meeting_payload(result)
     conn = get_connection()
     cursor = conn.execute(
         '''INSERT INTO meetings
@@ -55,7 +58,7 @@ def get_all_meetings() -> list:
         'SELECT * FROM meetings ORDER BY created_at DESC'
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return [_deserialize_meeting_row(dict(r)) for r in rows]
 def search_meetings(query: str) -> list:
     """Simple full-text search across summary and transcript."""
     conn = get_connection()
@@ -67,7 +70,7 @@ def search_meetings(query: str) -> list:
         (like, like)
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return [_deserialize_meeting_row(dict(r)) for r in rows]
 
 def get_meeting_by_id(meeting_id: int) -> dict | None:
     """Fetches a single meeting by its primary key id."""
@@ -76,4 +79,11 @@ def get_meeting_by_id(meeting_id: int) -> dict | None:
         'SELECT * FROM meetings WHERE id = ?', (meeting_id,)
     ).fetchone()
     conn.close()
-    return dict(row) if row else None
+    return _deserialize_meeting_row(dict(row)) if row else None
+
+
+def _deserialize_meeting_row(row: dict) -> dict:
+    payload = normalize_meeting_payload(row)
+    payload['id'] = row.get('id')
+    payload['created_at'] = row.get('created_at')
+    return payload
