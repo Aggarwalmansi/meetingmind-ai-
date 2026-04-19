@@ -61,7 +61,7 @@ def download_report(req: MeetingRequest):
     Runs the full analysis and returns a PDF file directly.
     """
     try:
-        initial_state = {'audio_url': req.audio_url}
+        initial_state = {'audio_url': req.audio_url, 'push_notion': False}
         result = meeting_app.invoke(initial_state)
         result['audio_url'] = req.audio_url
         

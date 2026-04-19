@@ -21,15 +21,20 @@ if page == 'Meeting History':
     else:
         resp = requests.get(f'{BACKEND_URL}/history')
     
-    meetings = resp.json()
-    st.caption(f'{len(meetings)} meeting(s) found')
-    
-    for m in meetings:
-        with st.expander(f"{m['created_at'][:16]} — {m['audio_url'][:60]}"):
-            st.write(m['summary'])
-            items = json.loads(m['action_items'] or '[]')
-            for item in items:
-                st.markdown(f"- **{item['task']}** — {item['owner']}")
+    if resp.status_code == 200:
+        meetings = resp.json()
+        st.caption(f'{len(meetings)} meeting(s) found')
+        
+        for m in meetings:
+            with st.expander(f"{m['created_at'][:16]} — {m['audio_url'][:60]}"):
+                st.write(m['summary'])
+                items = json.loads(m['action_items'] or '[]')
+                for item in items:
+                    st.markdown(f"- **{item['task']}** — {item['owner']}")
+    else:
+        st.error(f'Could not load history. Backend returned: {resp.status_code}')
+        with st.expander('Debug Info'):
+            st.write(resp.text)
 
 else:
     # ■■ Header
