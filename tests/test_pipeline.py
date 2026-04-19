@@ -53,6 +53,24 @@ class ApiTests(unittest.TestCase):
         self.assertIsInstance(saved_payload['action_items'], list)
         self.assertIsInstance(saved_payload['sentiment'], dict)
 
+    @patch('main.index_meeting', side_effect=RuntimeError('chroma conflict'))
+    @patch('main.save_meeting', return_value=99)
+    @patch('main.meeting_app.invoke')
+    def test_analyze_survives_rag_indexing_failure(self, invoke_mock, save_mock, index_mock):
+        invoke_mock.return_value = {
+            'transcript': 'Speaker A: launch update',
+            'summary': 'Summary text',
+            'action_items': [{'task': 'Ship release', 'owner': 'Ava', 'deadline': 'Friday', 'priority': 'High'}],
+            'sentiment': {'overall_tone': 'Positive', 'risk_flags': [], 'energy_level': 'High', 'recommendation': 'Keep momentum'},
+            'report': 'Report text',
+        }
+
+        response = self.client.post('/analyze?push_notion=false', json={'audio_url': 'https://example.com/audio.mp3'})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['meeting_id'], 99)
+        self.assertEqual(body['summary'], 'Summary text')
+
 class NodeTests(unittest.TestCase):
     @patch('agent.nodes.aai.Transcriber')
     def test_transcribe_audio_falls_back_to_text_when_utterances_missing(self, transcriber_cls):

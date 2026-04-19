@@ -10,6 +10,19 @@ st.set_page_config(
 
 BACKEND_URL = 'https://meetingmind-ai-hkfc.onrender.com'
 
+
+def parse_api_error(resp: requests.Response) -> str:
+    try:
+        payload = resp.json()
+    except ValueError:
+        return resp.text or f'HTTP {resp.status_code}'
+
+    if isinstance(payload, dict):
+        detail = payload.get('detail')
+        if isinstance(detail, str) and detail.strip():
+            return detail
+    return str(payload)
+
 page = st.sidebar.radio('Navigate', ['Analyze Meeting', 'Meeting History'])
 
 if page == 'Meeting History':
@@ -61,12 +74,20 @@ else:
                         json={'audio_url': audio_url},
                         timeout=300,
                     )
+                    if resp.status_code != 200:
+                        st.error(f'Analysis failed: {parse_api_error(resp)}')
+                        st.stop()
+
                     data = resp.json()
                     meeting_id = data.get('meeting_id')
 
                 except Exception as e:
                     st.error(f'Could not reach backend: {e}')
                     st.stop()
+
+            if not meeting_id:
+                st.error('Analysis did not return a meeting ID, so the report cannot be fetched.')
+                st.stop()
 
             st.success('Analysis complete!')
 

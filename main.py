@@ -49,7 +49,10 @@ def analyze_meeting(req: MeetingRequest,push_notion: bool = True):
         result['audio_url'] = req.audio_url
 
         row_id = save_meeting(result)
-        index_meeting(row_id, result.get('summary', '')) # index for RAG
+        try:
+            index_meeting(row_id, result.get('summary', '')) # index for RAG
+        except Exception:
+            logger.exception('RAG indexing failed for meeting_id=%s; continuing without blocking analyze response', row_id)
         return {
             'meeting_id':   row_id,
             'transcript': result.get('transcript'),

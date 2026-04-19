@@ -1,30 +1,39 @@
 import chromadb
+import logging
 import os
 
 CHROMA_PATH = os.path.join(os.path.dirname(__file__), '..', 'chroma_store')
 
 _client = None
 _collection = None
+logger = logging.getLogger(__name__)
 
 def _get_collection():
     """
     Lazy-initializes ChromaDB client and collection on first use.
-    Uses chromadb's built-in ONNX embedder — no PyTorch, no sentence-transformers.
-    Safe to call at module import time; actual model loads only on first real request.
+    Reuses an existing persisted collection if it already exists so deployment
+    does not break when the stored embedding config differs from the current code.
     """
     global _client, _collection
     if _collection is not None:
         return _collection
 
-    from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
-    embed_fn = ONNXMiniLM_L6_V2()
-
     _client = chromadb.PersistentClient(path=CHROMA_PATH)
-    _collection = _client.get_or_create_collection(
-        name='meeting_summaries',
-        embedding_function=embed_fn,
-    )
+    try:
+        _collection = _client.get_collection(name='meeting_summaries')
+        logger.info('Loaded existing Chroma collection "meeting_summaries"')
+    except Exception:
+        from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
+
+        embed_fn = ONNXMiniLM_L6_V2()
+        _collection = _client.get_or_create_collection(
+            name='meeting_summaries',
+            embedding_function=embed_fn,
+        )
+        logger.info('Created Chroma collection "meeting_summaries" with ONNX embedding')
     return _collection
+
+
 def index_meeting(meeting_id: int, summary: str, metadata: dict = None):
     """
     Converts the meeting summary to a vector and stores it.
