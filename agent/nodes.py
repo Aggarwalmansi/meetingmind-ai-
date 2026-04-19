@@ -148,6 +148,9 @@ def rag_context_node(state: MeetingState) -> dict:
     return {'rag_context': context}
 
 def push_to_notion(state: MeetingState) -> dict:
+    print("=== ENTERED push_to_notion ===")
+    print("STATE:", state)
+    print("ACTION ITEMS:", state.get('action_items'))
     """
     Pushes action items from the current meeting into a Notion database.
     Each action item becomes its own row in the database.
@@ -165,6 +168,7 @@ def push_to_notion(state: MeetingState) -> dict:
     items = state.get('action_items', [])
     today = __import__('datetime').date.today().isoformat()
     for item in items:
+        print("DEBUG ITEM:", item)
         try:
             notion.pages.create(
                 parent={'database_id': notion_db_id},
