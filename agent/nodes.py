@@ -155,6 +155,8 @@ def rag_context_node(state: MeetingState) -> dict:
     return {'rag_context': context}
 
 def push_to_notion(state: MeetingState) -> dict:
+    import os
+
     """
     Pushes action items from the current meeting into a Notion database.
     Each action item becomes its own row in the database.
@@ -163,77 +165,84 @@ def push_to_notion(state: MeetingState) -> dict:
     if not state.get('push_notion', False):
         return {}
 
-    notion_token = os.getenv('NOTION_TOKEN')
-    notion_db_id = os.getenv('NOTION_DB_ID')
-    if not notion_token or not notion_db_id:
-        logger.warning('Notion credentials not found; skipping Notion push')
-        return {}
-
-    notion = NotionClient(auth=notion_token)
-    items = normalize_action_items(state.get('action_items', []))
-    if not items:
-        logger.info('Skipping Notion push because there are no normalized action items')
-        return {}
-
     try:
-        database = notion.databases.retrieve(database_id=notion_db_id)
-    except Exception as exc:
-        logger.exception('Failed to retrieve Notion database schema: %s', exc)
-        return {}
+        raw_token = os.getenv("NOTION_TOKEN")
+        raw_db_id = os.getenv("NOTION_DB_ID")
+        notion_token = raw_token.strip().strip("'\"") if raw_token else None
+        notion_db_id = raw_db_id.strip().strip("'\"") if raw_db_id else None
 
-    properties = database.get('properties', {})
-    if not properties:
-        data_sources = database.get('data_sources', [])
-        data_source_id = data_sources[0].get('id') if data_sources else None
-        if data_source_id:
-            try:
-                data_source = notion.data_sources.retrieve(data_source_id=data_source_id)
-                properties = data_source.get('properties', {})
-                logger.info('Resolved Notion schema via data source %s', data_source_id)
-            except Exception as exc:
-                logger.exception('Failed to retrieve Notion data source schema: %s', exc)
-                return {}
+        if not notion_token or not notion_db_id:
+            logger.warning('Notion credentials not found; skipping Notion push')
+            return {}
 
-    title_property = next((name for name, meta in properties.items() if meta.get('type') == 'title'), None)
-    if not title_property:
-        logger.error('Notion database %s has no title property; skipping push', notion_db_id)
-        return {}
+        notion = NotionClient(auth=notion_token)
+        items = normalize_action_items(state.get('action_items', []))
+        if not items:
+            logger.info('Skipping Notion push because there are no normalized action items')
+            return {}
 
-    today = __import__('datetime').date.today().isoformat()
-    for item in items:
         try:
-            notion_properties = {
-                title_property: {
-                    'title': [{'text': {'content': item.get('task', 'Untitled task')}}]
-                }
-            }
-            if 'Owner' in properties and properties['Owner'].get('type') == 'rich_text':
-                notion_properties['Owner'] = {
-                    'rich_text': [{'text': {'content': item.get('owner', 'Unassigned')}}]
-                }
-            if 'Deadline' in properties and properties['Deadline'].get('type') == 'rich_text':
-                notion_properties['Deadline'] = {
-                    'rich_text': [{'text': {'content': item.get('deadline', 'Not specified')}}]
-                }
-            if 'Priority' in properties and properties['Priority'].get('type') == 'select':
-                notion_properties['Priority'] = {
-                    'select': {'name': item.get('priority', 'Medium')}
-                }
-            if 'Meeting Date' in properties and properties['Meeting Date'].get('type') == 'date':
-                notion_properties['Meeting Date'] = {
-                    'date': {'start': today}
-                }
-            if 'Audio URL' in properties and properties['Audio URL'].get('type') == 'rich_text':
-                notion_properties['Audio URL'] = {
-                    'rich_text': [{'text': {'content': state.get('audio_url', '')}}]
-                }
-
-            notion.pages.create(
-                parent={'database_id': notion_db_id},
-                properties=notion_properties,
-            )
+            database = notion.databases.retrieve(database_id=notion_db_id)
         except Exception as exc:
-            task_name = item.get('task', 'Untitled task') if isinstance(item, dict) else str(item)
-            logger.exception('[Notion] Push failed for item "%s": %s', task_name, exc)
-            continue
+            logger.exception('Failed to retrieve Notion database schema: %s', exc)
+            return {}
+
+        properties = database.get('properties', {})
+        if not properties:
+            data_sources = database.get('data_sources', [])
+            data_source_id = data_sources[0].get('id') if data_sources else None
+            if data_source_id:
+                try:
+                    data_source = notion.data_sources.retrieve(data_source_id=data_source_id)
+                    properties = data_source.get('properties', {})
+                    logger.info('Resolved Notion schema via data source %s', data_source_id)
+                except Exception as exc:
+                    logger.exception('Failed to retrieve Notion data source schema: %s', exc)
+                    return {}
+
+        title_property = next((name for name, meta in properties.items() if meta.get('type') == 'title'), None)
+        if not title_property:
+            logger.error('Notion database %s has no title property; skipping push', notion_db_id)
+            return {}
+
+        today = __import__('datetime').date.today().isoformat()
+        for item in items:
+            try:
+                notion_properties = {
+                    title_property: {
+                        'title': [{'text': {'content': item.get('task', 'Untitled task')}}]
+                    }
+                }
+                if 'Owner' in properties and properties['Owner'].get('type') == 'rich_text':
+                    notion_properties['Owner'] = {
+                        'rich_text': [{'text': {'content': item.get('owner', 'Unassigned')}}]
+                    }
+                if 'Deadline' in properties and properties['Deadline'].get('type') == 'rich_text':
+                    notion_properties['Deadline'] = {
+                        'rich_text': [{'text': {'content': item.get('deadline', 'Not specified')}}]
+                    }
+                if 'Priority' in properties and properties['Priority'].get('type') == 'select':
+                    notion_properties['Priority'] = {
+                        'select': {'name': item.get('priority', 'Medium')}
+                    }
+                if 'Meeting Date' in properties and properties['Meeting Date'].get('type') == 'date':
+                    notion_properties['Meeting Date'] = {
+                        'date': {'start': today}
+                    }
+                if 'Audio URL' in properties and properties['Audio URL'].get('type') == 'rich_text':
+                    notion_properties['Audio URL'] = {
+                        'rich_text': [{'text': {'content': state.get('audio_url', '')}}]
+                    }
+
+                notion.pages.create(
+                    parent={'database_id': notion_db_id},
+                    properties=notion_properties,
+                )
+            except Exception as exc:
+                task_name = item.get('task', 'Untitled task') if isinstance(item, dict) else str(item)
+                logger.exception('[Notion] Push failed for item "%s": %s', task_name, exc)
+                continue
+    except Exception as exc:
+        logger.exception('Unhandled error during Notion push execution: %s', exc)
+
     return {}  # no state mutation needed
