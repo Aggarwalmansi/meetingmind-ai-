@@ -190,5 +190,5 @@ def push_to_notion(state: MeetingState) -> dict:
             )
         except Exception as e:
             print(f'Notion push failed for item: {e}')
-            continue
+            raise e
     return {} # no state mutation needed

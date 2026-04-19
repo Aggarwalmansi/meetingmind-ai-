@@ -11,5 +11,5 @@ assemblyai
 reportlab
 pydantic
 chromadb
-sentence-transformers
+onnxruntime
 notion-client

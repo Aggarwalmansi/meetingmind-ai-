@@ -67,4 +67,13 @@ def search_meetings(query: str) -> list:
         (like, like)
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]  
+    return [dict(r) for r in rows]
+
+def get_meeting_by_id(meeting_id: int) -> dict | None:
+    """Fetches a single meeting by its primary key id."""
+    conn = get_connection()
+    row = conn.execute(
+        'SELECT * FROM meetings WHERE id = ?', (meeting_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None

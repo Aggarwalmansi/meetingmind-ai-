@@ -61,6 +61,8 @@ else:
                         timeout=300,
                     )
                     data = resp.json()
+                    meeting_id = data.get('meeting_id')
+
                 except Exception as e:
                     st.error(f'Could not reach backend: {e}')
                     st.stop()
@@ -129,18 +131,20 @@ else:
             st.divider()
             st.subheader('Download Report')
 
-            pdf_resp = requests.post(
-                f'{BACKEND_URL}/report',
-                json={'audio_url': audio_url},
-                timeout=300,
-            )
-
-            if pdf_resp.status_code == 200:
-                st.download_button(
-                    label='Download PDF Report',
-                    data=pdf_resp.content,
-                    file_name='meeting_report.pdf',
-                    mime='application/pdf',
+            if meeting_id:
+                pdf_resp = requests.get(
+                    f'{BACKEND_URL}/report/{meeting_id}',
+                    timeout=60,
                 )
+
+                if pdf_resp.status_code == 200:
+                    st.download_button(
+                        label='Download PDF Report',
+                        data=pdf_resp.content,
+                        file_name=f'meeting_{meeting_id}_report.pdf',
+                        mime='application/pdf',
+                    )
+                else:
+                    st.error('Could not generate PDF.')
             else:
-                st.error('Could not generate PDF.')
+                st.warning('No meeting ID found. Please analyze first.')

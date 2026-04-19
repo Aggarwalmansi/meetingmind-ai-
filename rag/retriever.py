@@ -1,18 +1,30 @@
 import chromadb
-from chromadb.utils import embedding_functions
 import os
-# ChromaDB stores its data in a local folder — no external server needed
+
 CHROMA_PATH = os.path.join(os.path.dirname(__file__), '..', 'chroma_store')
-# Use a free, local sentence-transformer model for embeddings
-# This runs 100% locally — no API key, no cost
-embed_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-model_name='all-MiniLM-L6-v2'
-)
-client = chromadb.PersistentClient(path=CHROMA_PATH)
-collection = client.get_or_create_collection(
-name='meeting_summaries',
-embedding_function=embed_fn,
-)
+
+_client = None
+_collection = None
+
+def _get_collection():
+    """
+    Lazy-initializes ChromaDB client and collection on first use.
+    Uses chromadb's built-in ONNX embedder — no PyTorch, no sentence-transformers.
+    Safe to call at module import time; actual model loads only on first real request.
+    """
+    global _client, _collection
+    if _collection is not None:
+        return _collection
+
+    from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
+    embed_fn = ONNXMiniLM_L6_V2()
+
+    _client = chromadb.PersistentClient(path=CHROMA_PATH)
+    _collection = _client.get_or_create_collection(
+        name='meeting_summaries',
+        embedding_function=embed_fn,
+    )
+    return _collection
 def index_meeting(meeting_id: int, summary: str, metadata: dict = None):
     """
     Converts the meeting summary to a vector and stores it.
@@ -20,26 +32,30 @@ def index_meeting(meeting_id: int, summary: str, metadata: dict = None):
     """
     if not summary or not summary.strip():
         return
+    collection = _get_collection()
     collection.upsert(
-    ids=[str(meeting_id)],
-    documents=[summary],
-    metadatas=[metadata or {}],
+        ids=[str(meeting_id)],
+        documents=[summary],
+        metadatas=[metadata or {}],
     )
+
 def retrieve_context(query_text: str, n_results: int = 3) -> str:
     """
     Searches ChromaDB for the top n_results most similar past meetings.
     Returns a formatted string ready to inject into a prompt.
     """
+    collection = _get_collection()
     if collection.count() == 0:
-        return '' # no past meetings yet — skip RAG
+        return ''
+
     results = collection.query(
-    query_texts=[query_text],
-    n_results=min(n_results, collection.count()),
+        query_texts=[query_text],
+        n_results=min(n_results, collection.count()),
     )
     documents = results.get('documents', [[]])[0]
     if not documents:
         return ''
-    context_parts = []
-    for i, doc in enumerate(documents, 1):
-        context_parts.append(f'Past meeting {i}:\n{doc}')
-    return '\n\n'.join(context_parts)
+
+    return '\n\n'.join(
+        f'Past meeting {i}:\n{doc}' for i, doc in enumerate(documents, 1)
+    )
