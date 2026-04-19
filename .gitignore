@@ -6,3 +6,6 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+chroma_store/chroma.sqlite3
+chroma_store
+meetings.db
