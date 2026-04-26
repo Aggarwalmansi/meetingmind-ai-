@@ -33,6 +33,16 @@ def api_request(method: str, path: str, **kwargs) -> requests.Response:
     return session.request(method, f'{BACKEND_URL}{path}', headers=headers, **kwargs)
 
 
+def analyze_request(audio_url: str, push_notion: bool) -> requests.Response:
+    return requests.post(
+        f'{BACKEND_URL}/analyze',
+        params={'push_notion': str(push_notion).lower()},
+        json={'audio_url': audio_url},
+        headers={'Accept': 'application/json'},
+        timeout=(15, 600),
+    )
+
+
 def parse_api_error(resp: requests.Response) -> str:
     content_type = resp.headers.get('content-type', '').lower()
     if 'text/html' in content_type:
@@ -103,13 +113,7 @@ else:
         else:
             with st.spinner('Agents are working... this takes 30-90 seconds.'):
                 try:
-                    resp = api_request(
-                        'POST',
-                        '/analyze',
-                        params={'push_notion': str(push_notion).lower()},
-                        json={'audio_url': audio_url},
-                        timeout=(15, 600),
-                    )
+                    resp = analyze_request(audio_url=audio_url, push_notion=push_notion)
                     if resp.status_code != 200:
                         st.error(f'Analysis failed: {parse_api_error(resp)}')
                         st.stop()
