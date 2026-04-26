@@ -18,8 +18,8 @@ retry = Retry(
     connect=3,
     read=3,
     backoff_factor=1.5,
-    status_forcelist=[429, 502, 503, 504],
-    allowed_methods=['GET', 'POST'],
+    status_forcelist=[502, 503, 504],
+    allowed_methods=['GET'],
     raise_on_status=False,
 )
 adapter = HTTPAdapter(max_retries=retry)
@@ -49,6 +49,8 @@ def parse_api_error(resp: requests.Response) -> str:
         detail = payload.get('detail')
         if isinstance(detail, str) and detail.strip():
             return detail
+        if resp.status_code == 429:
+            return 'The analysis provider rate-limited this request. The frontend now sends only one analyze request per click, but you may still need to wait briefly and retry.'
     return str(payload)
 
 page = st.sidebar.radio('Navigate', ['Analyze Meeting', 'Meeting History'])
